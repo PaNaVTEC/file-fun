@@ -19,45 +19,40 @@ data Options = Options
     , oStdIn      :: Bool
     , oFileToRead :: Maybe String
     }
-
-type AppConfig = MonadReader Options
+data AppError = IOError E.IOException deriving Show
+type App a = ReaderT Options (ExceptT AppError IO) a
 
 -- program
 main :: IO ()
---main = (\a -> runExceptT $ runReaderT runProgram a) =<< parseCLI
-main = runReaderT runProgram =<< parseCLI
+main = runProgram =<< parseCLI
+  where
+    runProgram = (print =<<) . runExceptT . runReaderT runApp
 
-runProgram :: ReaderT Options IO ()
---runProgram :: App ()
-runProgram = getSource
+runApp :: App ()
+runApp = getSource
   >>= handleCapitalization
   >>= handleExcitedness
   >>= liftIO . putStr
 
-getSource :: ReaderT Options IO String
---getSource :: App String
-getSource = B.bool (either id id <$> loadContents) (liftIO getContents) =<< asks oStdIn
+getSource :: App String
+getSource = B.bool loadContents (liftIO getContents) =<< asks oStdIn
 
-handleCapitalization :: String -> ReaderT Options IO String
---handleCapitalization :: String -> App String
+handleCapitalization :: String -> App String
 handleCapitalization s = B.bool s (map C.toUpper s) <$> asks oCapitalize
 
-handleExcitedness :: String -> ReaderT Options IO String
---handleExcitedness :: String -> App String
+handleExcitedness :: String -> App String
 handleExcitedness s = B.bool s ("ZOMG " ++ s) <$> asks oExcited
 
-type App a = ReaderT Options (ExceptT String IO) a
 
-loadContents :: ReaderT Options IO (Either String String)
---loadContents :: App (Either String String)
-loadContents = liftIO . readFileOrDefault =<< asks oFileToRead
+loadContents :: App String
+loadContents =
+    maybe defaultResponse readFileFromOptions =<< asks oFileToRead
   where
-    readFileOrDefault :: Maybe FilePath -> IO (Either String [Char])
-    readFileOrDefault = maybe defaultResponse readFileFromOptions
+    readFileFromOptions :: FilePath -> App String
+    readFileFromOptions f = either throwError return =<< BF.first IOError <$> liftIO (safeReadFile f)
 
-    readFileFromOptions :: FilePath -> IO (Either String String)
-    readFileFromOptions f = BF.first show <$> safeReadFile f
-    defaultResponse = return $ Right "This is fun!"
+    defaultResponse :: App String
+    defaultResponse = return "This is fun!"
 
 -- CLI parsing
 parseCLI :: IO Options
@@ -73,6 +68,5 @@ parseOptions = Options
     <*> (optional $ strOption $ long "file")
 
 -- safer reading of files
-
 safeReadFile :: FilePath -> IO (Either E.IOException String)
 safeReadFile = E.try . readFile
